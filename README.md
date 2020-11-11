@@ -1,12 +1,12 @@
 # Input Format
 ### File metadata.csv
-Contains two columns:
+CSV-File containing two columns:
 * "resource_id": unique id of the article
 * "text": full body article text without html tags. 
 * "publication_date": date of publication. 
 
 ### File user_item_matrix.pq
-Contains three columns:
+Parquett-file containing three columns:
 * "user_id": unique id of the user
 * "resource_id": unique id matching the one in metadata.csv
 * "timestamp":  timestamp of the click
