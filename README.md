@@ -1,22 +1,22 @@
-#Input Format
-###File metadata.csv
+# Input Format
+### File metadata.csv
 Contains two columns:
 * "resource_id": unique id of the article
 * "text": full body article text without html tags. 
 * "publication_date": date of publication. 
 
-###File user_item_matrix.pq
+### File user_item_matrix.pq
 Contains three columns:
 * "user_id": unique id of the user
 * "resource_id": unique id matching the one in metadata.csv
 * "timestamp":  timestamp of the click
 
-#Environement
+# Environement
 Python 3.6.8
 
 Packages in requirements.txt
 
-#Usage
+# Usage
 Run preprocessing.py to generate some random data or create data yourself. The functions in the module should describe 
 the desired format and location of the files.
 Run any of the algortihms:
