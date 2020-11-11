@@ -6,7 +6,7 @@ CSV-File containing two columns:
 * "publication_date": date of publication. 
 
 ### File user_item_matrix.pq
-Parquett-file containing three columns:
+Parquet-file containing three columns:
 * "user_id": unique id of the user
 * "resource_id": unique id matching the one in metadata.csv
 * "timestamp":  timestamp of the click
