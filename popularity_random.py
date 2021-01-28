@@ -39,7 +39,7 @@ def pop_predict(model, grouped_train, N=10):
     isnull = predictions['read_articles'].isnull()
     if isnull.sum() > 0:
         predictions.loc[isnull, 'read_articles'] = [[[]] * isnull.sum()]
-    predictions = predictions[[x[1] not in x[0] for x in zip(predictions['read_articles'], predictions['predictions'])]]
+    predictions['predictions'] = [[article for article in x[1] if article not in x[0]] for x in zip(predictions['read_articles'], predictions['predictions'])]
     print(f"Pop prediction done in {datetime.datetime.now() - now}")
 
     return predictions
@@ -49,10 +49,6 @@ def random_predict(articles, grouped_train, N=10):
     now = datetime.datetime.now()
     predictions = pd.DataFrame(grouped_train)
     predictions['predictions']=predictions['article_id'].apply(lambda x:random.sample(list(articles), N))
-        # prediction = random.sample(list(articles), N)
-        # predictions[user_ix] = [list(prediction)]
-    # predictions = pd.DataFrame(predictions).T
-    # predictions.columns = ['predictions']
 
     predictions['read_articles'] = grouped_train
     isnull = predictions['read_articles'].isnull()
@@ -62,7 +58,6 @@ def random_predict(articles, grouped_train, N=10):
     print(f"Pop prediction done in {datetime.datetime.now() - now}")
 
     return predictions
-from helper import restrict_articles_to_timeframe
 
 if __name__ == "__main__":
     N = 50 #number of predictions
@@ -78,11 +73,11 @@ if __name__ == "__main__":
 
     pred = pop_predict(popularity, user_item_train.head(limit), N)
 
-    pop = evaluate(pred, user_item_test.loc[pred.index], experiment_name='popularity_inital_results',limit=limit)
+    pop = evaluate(pred, user_item_test.loc[pred.index], experiment_name='popularity.results',limit=limit)
 
     random_scores = random_predict(itemids, user_item_train.head(limit), N)
-    rand_algorithm = evaluate(random_scores, user_item_test.loc[pred.index],experiment_name='random_inital_results', limit=limit)
+    rand_algorithm = evaluate(random_scores, user_item_test.loc[pred.index],experiment_name='random.results', limit=limit)
 
     b=pd.DataFrame(user_item_test)
     b.columns=['predictions']
-    best_res = evaluate(b.loc[pred.index], user_item_test.loc[pred.index],experiment_name='best_res', limit=limit)
+    best_res = evaluate(b.loc[pred.index], user_item_test.loc[pred.index],experiment_name='best.results', limit=limit)

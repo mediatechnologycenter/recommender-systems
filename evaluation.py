@@ -65,7 +65,7 @@ def evaluate(pred, ground_truth, experiment_name='results.csv', limit=6000):
         os.makedirs('results')
     results.to_csv(f"results/{experiment_name}", mode='+a')
 
-    return r20_list, r50_list, n100_list
+    return r20_list, r50_list, n100_list,np.mean(r5_list),np.mean(n100_list)
 
 
 def NDCG_binary_at_k_batch(predictions, ground_truth, k=100, limit=1000):

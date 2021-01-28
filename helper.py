@@ -20,7 +20,7 @@ import datetime
 import pandas as pd
 
 
-def restrict_articles_to_timeframe(user_item,meta_data, start_date=datetime.date(2019, 12, 1)):
+def restrict_articles_to_timeframe(user_item,meta_data, start_date=datetime.date(2019, 12, 1),horizontal=True):
     """
     (Used for Partner B)
     Restricts the articles and the user-item-matrix to articles that are published after start_date
@@ -29,8 +29,10 @@ def restrict_articles_to_timeframe(user_item,meta_data, start_date=datetime.date
     meta_data['publication_last_updated'] = pd.to_datetime(meta_data['publication_last_updated'], utc=True).dt.date
     meta_data = meta_data[(meta_data['publication_last_updated'] > start_date) & (
             meta_data['publication_last_updated'] < datetime.date(2020, 3, 1))]
-
-    user_item = user_item.apply(
-        lambda x: [article for article in x if article in meta_data['resource_id'].values])
-    user_item=user_item[user_item.str.len()>0]
+    if horizontal:
+        user_item = user_item.apply(
+            lambda x: [article for article in x if article in meta_data['resource_id'].values])
+        user_item=user_item[user_item.str.len()>0]
+    else:
+        user_item=user_item[user_item['resource_id'].isin(meta_data['resource_id'].values)]
     return user_item,meta_data

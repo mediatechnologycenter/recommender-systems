@@ -1,14 +1,30 @@
+
 import pandas as pd
+import gc
 import pickle
 import numpy as np
 import os
 import datetime
+import random
+from evaluation import evaluate
+import shelve
+from tensorflow.keras import regularizers
 from tensorflow.keras.constraints import unit_norm
-from tensorflow.keras.layers import Dense, Input, Embedding, concatenate, Flatten,Dropout
+from tensorflow.keras.layers import Dense, Input, Embedding, concatenate, Flatten, Dropout
 from tensorflow.keras.models import Model, Sequential
-import tensorflow as tf
 import tensorflow.keras.backend as K
 import math
+import tensorflow as tf
+import os, psutil
+
+process = psutil.Process(os.getpid())
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    # Currently, memory growth needs to be the same across GPUs
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+    logical_gpus = tf.config.experimental.list_logical_devices('GPU')
+    print(len(gpus), "Physical GPUs,", len(logical_gpus), "Logical GPUs")
 
 """
 Implementation of our new approach. As an overview: we embed the articles with some embedding (Sentence Bert).
@@ -17,11 +33,15 @@ We feed the user-vector together with a article-vector that the user read (pos_s
 read (neg_sample) into a neural network and use pairwise loss to train the model weights.
 """
 
-def preprocessing(grouped_train,metadata, folder):
+
+def preprocessing(grouped_train, metadata, folder, model_params):
     """
     Creates an embedding of the articles and users and saves it
     """
-    print("preprocessing...")
+    if not os.path.exists(f'{folder}'):
+        os.makedirs(f'{folder}')
+    grouped = model_params.get('random_sampling', True)
+    print("Preprocessing Embeddings...")
     from sentence_transformers import SentenceTransformer
     embedder = SentenceTransformer('distiluse-base-multilingual-cased')
     embeddings = embedder.encode(list(metadata['text']), convert_to_tensor=False)
@@ -32,26 +52,95 @@ def preprocessing(grouped_train,metadata, folder):
     lookup = article_vectors.T
     pickle.dump(lookup, open(f"{folder}/article_embedding.pkl", "wb+"))
 
-    print("Embedded Articles...")
+    if not grouped:
+        grouped_train2 = grouped_train.groupby('user_ix').resource_id.apply(list)
+        print("Embedded Articles...")
+    else:
+        grouped_train2 = grouped_train
 
     ##### get user_vector
     from pandarallel import pandarallel
     pandarallel.initialize(use_memory_fs=False)
-    user_vectors = grouped_train.parallel_apply(lambda x: lookup.loc[x, :].mean())
+    user_vectors = grouped_train2.parallel_apply(lambda x: lookup.loc[x, :].mean())
     # user_vectors = grouped_train.apply(lambda x: lookup.loc[x, :].mean())
     user_vectors.columns = [str(i) for i in user_vectors]
     user_vectors.to_parquet(f"{folder}/user_embedding.pq")
 
     print("Embedded Users...")
 
+def store_samples(user_item_train, folder, filename, split_size, k):
+    user_item_train = user_item_train.sort_values('time')
+    user_item_train['k'] = range(len(user_item_train))
+    grouped_positives = user_item_train.sort_values('time').groupby('user_ix').resource_id.apply( set)
+    grouped_positives.name = 'pos_samples'
+    splits = int(len(user_item_train) / split_size)
+
+
+    myShelvedDict = shelve.open(f"{folder}/{filename}.db", flag='n')
+    myShelvedDict.close()
+
+    for i in range(splits + 1):
+        print(f"Working on negative samples {i}/{splits}")
+        start = datetime.datetime.now()
+        tmp = user_item_train.iloc[i * split_size:(i + 1) * split_size, :]
+
+        tmp = pd.merge(tmp, grouped_positives, how='left', left_on='user_ix', right_index=True)
+
+        tmp['res'] = "," + tmp['resource_id'].astype(str)
+        tmp['neg_samples'] = ''
+        for i in range(-4, 6):
+            if i == 0:
+                continue
+            tmp['neg_samples'] = tmp['neg_samples'] + tmp['res'].shift(i, fill_value='')
+        tmp['neg_samples'] = tmp['neg_samples'].str[1:].str.split(',').apply(set)
+        tmp['neg_samples'] = tmp['neg_samples'] - tmp['pos_samples']
+        tmp_fix=tmp[tmp['neg_samples'].str.len()<k]
+        tmp_fix['neg_samples']= tmp_fix['k'].apply(
+            lambda k: set(user_item_train['resource_id'].iloc[
+                          max(0, k - 100):(k + 1) + 100]))
+
+        tmp_fix['neg_samples'] = tmp_fix['neg_samples'] - tmp_fix['pos_samples']
+        tmp.loc[tmp_fix.index,'neg_samples']=tmp_fix['neg_samples']
+
+
+        tmp_fix=tmp[tmp['neg_samples'].str.len()<k]
+        tmp_fix['neg_samples']= tmp_fix['k'].apply(
+            lambda k: set(user_item_train['resource_id'].iloc[
+                          max(0, k - 10000):(k + 1) + 10000]))
+
+        tmp_fix['neg_samples'] = tmp_fix['neg_samples'] - tmp_fix['pos_samples']
+        tmp.loc[tmp_fix.index,'neg_samples']=tmp_fix['neg_samples']
+
+        tmp['neg_samples'] = tmp['neg_samples'].apply(lambda x: random.choices(list(x), k=k))
+        tmp.index=tmp['k'].astype(str)
+
+        myShelvedDict = shelve.open(f'{folder}/{filename}.db', flag='wf')
+        myShelvedDict.update(tmp['neg_samples'].to_dict())
+        myShelvedDict.close()
+        del tmp
+
+
+    user_item_train.to_pickle(f'{folder}/{filename}.pkl')
+
+
+
+def get_timewise_neg_samples(user_item_train, user_item_test, folder, split_size=100000, k=5):
+    store_samples(user_item_train=user_item_train, folder=folder, filename="user_item_train_neg_sampling",
+                  split_size=split_size, k=k)
+    store_samples(user_item_train=user_item_test, folder=folder, filename="user_item_test_neg_sampling",
+                  split_size=split_size, k=k)
+
+
 def load_embedding(folder):
     article_embedding = pd.read_pickle(f"{folder}/article_embedding.pkl")
     user_embedding = pd.read_parquet(f"{folder}/user_embedding.pq")
     return article_embedding, user_embedding
 
-def nn_train(train,user_embedding,article_embedding, model_params, model_path,new=False, last_x_articles=1000 ):
+
+def nn_train(train, test, user_embedding, article_embedding, model_params, model_path, new=False, last_x_articles=1000,
+             retrain=False, new_model_path=''):
     """
-    Trains the model and returns it. 
+    Trains the model and returns it.
     :param train: pd.Series of training data to use. Index is the UserID, value is a list of ArticleIDs the user read.
     :param user_embedding: Embedding Dataframe of the Users. Index is the UserID, values is the embeddingvector
     :param article_embedding: Embedding Dataframe of the Articles. Index is the ArticleID, values is the embeddingvector
@@ -59,259 +148,518 @@ def nn_train(train,user_embedding,article_embedding, model_params, model_path,ne
     :param model_path: Path to save the model
     :param new: If set to False it simply loads the model saved under model_path
     :param last_x_articles: Restrict to the last last_x_articles the each user read.
-    :return: Returns the model and the trainig history
+    :return: Returns the model and the training history
     """
-
+    grouped = model_params.get('random_sampling', True)
     now = datetime.datetime.now()
-    if new:
+    model = None
+    if not new:
+        model = tf.keras.models.load_model(f'{model_path}.h5')
 
-        val = train.str[-last_x_articles:].head(int(len(train)*0.1))
-        train = train.str[-last_x_articles:].tail(len(train)-int(len(train)*0.1))
-        model,history = nn_model(article_embedding, user_embedding, train,val, model_params,model_path=model_path)
+        history = ""
+        model_path = new_model_path
+
+    if new or retrain:
+
+        if grouped:
+            train=train[train.str.len()<1000]
+            val = train.str[-last_x_articles:].head(int(len(train) * 0.1))
+            train = train.str[-last_x_articles:].tail(len(train) - int(len(train) * 0.1))
+        else:
+
+            val = train.head(int(len(train) * 0.1))
+            train = train.tail(len(train) - int(len(train) * 0.1))
+        model, history = nn_model(article_embedding, user_embedding, train, val, test, model_params,
+                                  model_path=model_path, model=model)
         # model=None
-    else:
-        model=   tf.keras.models.load_model(f'{model_path}')
-        history=""
-    return model,history
 
-def explode_data_and_add_original(grouped):
-    """
-    Helper function for upsamping
-    """
-    grouped_upsampling = pd.DataFrame(grouped.explode())
-    grouped_upsampling.columns = ['pos_sample']
-    grouped_upsampling['pos_samples'] = grouped
-    grouped_upsampling = grouped_upsampling.reset_index()
-    return grouped_upsampling
+    return model, history
+
+def load_neg_sampling(folder):
+
+    user_item_train = pd.read_pickle(f'{folder}/user_item_train_neg_sampling.pkl')
+    user_item_test = pd.read_pickle(f'{folder}/user_item_test_neg_sampling.pkl')
+    return user_item_train, user_item_test
+
 class data_generator(tf.keras.utils.Sequence):
     """
-    Class to create and feed the batches. For each user-item sample in the training set samples neg_samples_per_user
-    negative samples i.e. articles he did not read. Returns batches of size batch_size where each sample is:
+    Class to create and feed the batches. For each user-item sample in the training set sample 1
+    negative sample i.e. articles he did not read. Returns batches of size batch_size where each sample is:
     ((uservector, pos_sample_article_vector),(uservector, neg_sample_article_vector))
     """
 
-    def __init__(self, grouped_exploded, uservector, lookup, batch_size, neg_samples_per_user=10):
-        self.grouped_upsampling = grouped_exploded.sample(frac=1)#explode_data_and_add_original(grouped_exploded).sample(frac=1)
-        self.neg_samples_per_user = neg_samples_per_user
-        self.batch_size = batch_size
-        self.new_batch_size = int(self.batch_size * 0.8)
+    def __init__(self, grouped_exploded, uservector, lookup, model_params, neg_samples=None):
+        self.model_params=model_params
         self.lookup = lookup
         self.uservector = uservector
-        self.len=math.ceil(len(self.grouped_upsampling) / self.batch_size) * self.neg_samples_per_user
-        self.seen=0
+        if model_params['random_sampling']:
+            self.grouped_upsampling = self.explode_data_and_add_original(grouped_exploded).sample(frac=1,
+                                                                                                  random_state=1)
+        else:
+            self.grouped_upsampling = grouped_exploded.sample(frac=1, random_state=1)
+            self.grouped_positives = self.grouped_upsampling.groupby('user_ix').resource_id.apply(set)
+            self.grouped_upsampling = self.grouped_upsampling[
+                self.grouped_upsampling['resource_id'].isin(self.lookup.index)]
+            self.grouped_upsampling = self.grouped_upsampling[
+                self.grouped_upsampling['user_ix'].isin(self.uservector.index)]
+
+        self.neg_sampling = neg_samples
+        self.new_batch_size = int(self.model_params['batch_size'] * 0.8)
+        self.len = math.ceil(len(self.grouped_upsampling) / self.model_params['batch_size'])
+        self.seen = 0
+
+        self.uservector.columns = self.lookup.columns
+        self.random_state = 0
 
     def __len__(self):
         return self.len
 
+    def explode_data_and_add_original(self, grouped):
+        """
+        Helper function for upsamping
+        """
+        grouped_upsampling = pd.DataFrame(grouped.explode())
+        grouped_upsampling.columns = ['pos_sample']
+        grouped_upsampling['pos_samples'] = grouped
+        grouped_upsampling = grouped_upsampling.reset_index()
+        grouped_upsampling = grouped_upsampling[grouped_upsampling['pos_sample'].isin(self.lookup.index)]
+        grouped_upsampling = grouped_upsampling[grouped_upsampling['user_ix'].isin(self.uservector.index)]
+        return grouped_upsampling
+
     def on_epoch_end(self):
         'Updates indexes after each epoch'
-        if self.seen>=self.len:
-            self.grouped_upsampling = self.grouped_upsampling.sample(frac=1)
-            self.seen=0
-            print('shuffeled')
+
+        self.random_state = self.random_state + 1
+        self.grouped_upsampling = self.grouped_upsampling.sample(frac=1, random_state=self.random_state)
+
+
+        gc.collect()
+
     def __getitem__(self, idx):
-        if idx==1:
-            print('test')
-        self.seen=self.seen+1
-        try:
-            i = idx % math.ceil(len(self.grouped_upsampling) / self.batch_size)
-            batch = self.grouped_upsampling.iloc[i * self.batch_size:(i + 1) * self.batch_size, :]
-            # batch = pd.concat([batch] * self.neg_samples_per_user)
 
+        k = idx % math.ceil(len(self.grouped_upsampling) / self.model_params['batch_size'])
+        batch = self.grouped_upsampling.iloc[k * self.model_params['batch_size']:(k + 1) * self.model_params['batch_size'], :]
+
+        if self.model_params['random_sampling']:
+            #random sampling
             for i in range(9):
-                batch['neg_sample'] = list(pd.Series(self.lookup.index).sample(n=len(batch), replace=True))
-                batch_new = batch[[x[1] not in x[0] for x in zip(batch['pos_samples'], batch['neg_sample'])]][
-                    ['user_ix', 'pos_sample', 'neg_sample']]
+                batch['neg_sample'] = list(pd.Series(self.lookup.index).sample(n=len(batch), replace=True,
+                                                                               random_state=self.random_state + k + i))
+                batch_new = batch[[x[1] not in x[0] for x in zip(batch['pos_samples'], batch['neg_sample'])]]
 
-                if len(batch_new) > self.new_batch_size:
+                if len(batch_new) > self.new_batch_size or len(batch) == len(batch_new):
                     break
             if i == 8:
-                batch_new = batch_new.sample(n=self.new_batch_size, replace=True)
-                print("hmmmm")
+                batch_new = batch_new.sample(n=self.new_batch_size, replace=True, random_state=self.random_state)
+                print("Warning: had to use backup plan since we didnt find good negative samples")
             else:
-                batch_new = batch_new.sample(n=self.new_batch_size)
+                batch_new = batch_new.sample(n=min(len(batch_new), self.new_batch_size),
+                                             random_state=self.random_state)
             batch_pos, batch_neg = self.create_batch(batch_new)
-        except KeyError:
-            print("hopla")
-            return self.__getitem__(idx+1)
+        else:
+            #timewise/custom sampling
+
+            batch['neg_samples'] = [self.neg_sampling.get(str(key)) for key in batch['k']]
+            batch['neg_sample'] = batch['neg_samples'].str[self.random_state % len(batch.iloc[0, :]['neg_samples'])]
+
+            batch['neg_sample']=batch['neg_sample'].astype(self.lookup.index[0].dtype)
+
+            batch['pos_sample'] = batch['resource_id']
+            batch_pos, batch_neg = self.create_batch(batch)
         assert not np.any(np.isnan(batch_pos))
         assert not np.any(np.isnan(batch_neg))
+
+        if  self.model_params['epsilon']:
+            batch_pos = self.diff_privacy_noise_first(batch_pos, self.model_params['epsilon'], 1.0 / len(self.grouped_upsampling))
+            batch_neg = self.diff_privacy_noise_first(batch_neg, self.model_params['epsilon'], 1.0 / len(self.grouped_upsampling))
+
         return ((batch_pos, batch_neg), batch_pos)
 
+    @staticmethod
+    def diff_privacy_noise_first(X, epsilon, delta):
+        diameter = (X.max() - X.min()).max()
+        b = diameter / (epsilon - np.log(1 - delta))
+        noise_vector = np.random.laplace(0, b, X.shape)
+        return X + noise_vector
+
     def create_batch(self, batch):
+
         users = batch['user_ix'].values
         pos_samples = batch['pos_sample'].values
         neg_samples = list(batch['neg_sample'])
 
-        return np.concatenate((self.uservector.loc[users, :].values, self.lookup.loc[pos_samples, :].values),
+        user = self.uservector.loc[users, :]
+        pos = self.lookup.loc[pos_samples, :]
+        neg = self.lookup.loc[neg_samples, :]
+
+        user.index = batch.index
+        pos.index = batch.index
+        neg.index = batch.index
+
+        if         self.model_params['take_target_out']:
+            user = (user.multiply(batch['pos_samples'].str.len(), axis='index').subtract(pos, axis='index')).divide(
+                batch['pos_samples'].str.len() - 1, axis='index')
+
+            if np.any(np.isnan(user)):
+                user = self.uservector.loc[users, :]
+                user.index = batch.index
+
+        if self.model_params['normalize'] == 1:
+            pos = np.concatenate((user.values, pos.values),
+                                 axis=1)
+            neg = np.concatenate((user.values, neg.values),
+                                 axis=1)
+
+            return pos / np.linalg.norm(pos, ord=2, axis=1, keepdims=True), neg / np.linalg.norm(neg, ord=2, axis=1,
+                                                                                                 keepdims=True)
+
+        if self.model_params['normalize'] == 2:
+            return np.concatenate(
+                (user.values / np.linalg.norm(user.values, ord=2, axis=1, keepdims=True),
+                 pos.values / np.linalg.norm(pos.values, ord=2, axis=1, keepdims=True)),
+                axis=1), np.concatenate(
+                (user.values / np.linalg.norm(user.values, ord=2, axis=1, keepdims=True),
+                 neg.values / np.linalg.norm(neg.values, ord=2, axis=1, keepdims=True)), axis=1)
+        return np.concatenate((user.values, pos.values),
                               axis=1), \
-               np.concatenate((self.uservector.loc[users, :].values, self.lookup.loc[neg_samples, :].values),
+               np.concatenate((user.values, neg.values),
                               axis=1)
 
-def nn_model(lookup, uservector, train,val, model_params,model_path):
+
+from tensorflow.keras.callbacks import Callback, LearningRateScheduler
+from tensorflow.keras import initializers
+
+
+def nn_model(lookup, uservector, train, val, test, model_params, model_path, model):
     """
     Defines the model and trains it
     """
-    lr = model_params['lr']
-    batch_size = model_params['batch_size']
-    epochs = model_params['epochs']
-    neg_samples_per_user = model_params['neg_samples_per_user']
-    alpha = model_params['alpha']
-    layers = model_params['layers']
-    dropout=model_params.get('dropout',0.5)
-    reg=model_params.get('reg',True)
-    steps = model_params.get('steps',int(train.str.len().sum() / batch_size) * neg_samples_per_user)
+    if len(lookup) != 2:
+        lookup = (lookup, lookup)
+    model_params['random_sampling'] = model_params.get('random_sampling', True)
+    model_params['random_sampling'] = model_params.get('random_sampling', 1)
+    model_params['lr'] = model_params.get('lr', 0.00001)
+    model_params['batch_size'] = model_params.get('batch_size', 100)
+    model_params['epochs'] = model_params.get('epochs', 50)
+    model_params['alpha'] = model_params.get('alpha', 1)
+    model_params['layers'] = model_params.get('layers', [1024, 512, 8])
+    model_params['dropout'] = model_params.get('dropout', 0.5)
+    model_params['dropout_first'] = model_params.get('dropout_first', model_params['dropout'])
+    model_params['reg'] = model_params.get('reg', 0)
+    model_params['normalize'] = model_params.get('normalize', 0)
+    model_params['interval'] = model_params.get('interval', 1)
+    model_params['checkpoint_interval'] = model_params.get('checkpoint_interval', 1)
+    model_params['early_stopping'] = model_params.get('early_stopping', 0)
+    model_params['loss'] = model_params.get('loss', "0")
+    model_params['optimizer'] = model_params.get('optimizer', "ADAM")
+    model_params['take_target_out'] = model_params.get('take_target_out', False)
+    model_params['decay'] = model_params.get('decay', False)
+    model_params['stop_on_metric'] = model_params.get('stop_on_metric', False)
+    model_params['workers'] = model_params.get('workers', 1)
+    model_params['train'] = model_params.get('train', True)
+    model_params['round'] = model_params.get('round', False)
+    model_params['epsilon'] = model_params.get('epsilon', 0)
+    history = ''
+    train_grouped = train
+    test_ids = test
+    neg_samples_train = None
+    neg_samples_test = None
+    if model_params['random_sampling']:
+        model_params['steps'] = model_params.get('steps', int(train.str.len().sum() / model_params['batch_size']) )
 
-    def custom_loss(y_pred_pos, y_pred_neg, alpha=1):
-        alpha = K.constant(alpha)
-        pointwise_loss = -K.log(y_pred_pos + 1e-07)
-        pairwise_loss = -K.log(K.sigmoid(y_pred_pos - y_pred_neg)+ 1e-07)
-        loss = alpha * pairwise_loss + (1 - alpha) * pointwise_loss
+    else:
+        train_grouped = pd.concat(
+            [train[train['user_ix'].isin(test['user_ix'])], val[val['user_ix'].isin(test['user_ix'])]]).groupby(
+            'user_ix').resource_id.apply(list)
+        test_ids = test.groupby('user_ix').resource_id.apply(list).head(1000)
+        model_params['steps'] = model_params.get('steps', int(len(train) / model_params['batch_size']) )
 
-        return loss
+        neg_samples_train = shelve.open(f'{model_params["folder"]}/user_item_train_neg_sampling.db', flag='r')
+        neg_samples_test = shelve.open(f'{model_params["folder"]}/user_item_test_neg_sampling.db', flag='r')
+    if model:
+        pass
+    else:
+        def custom_loss(y_pred_pos, y_pred_neg, model_params):
+            alpha = K.constant(model_params['alpha'])
+            pointwise_loss = -K.log(y_pred_pos + 1e-07) - K.log(1 - y_pred_neg + 1e-07)
 
-    embedding_size = lookup.shape[1] * 2
+            if model_params['loss'] == 'TOP':
+                pairwise_loss = K.sigmoid(y_pred_neg - y_pred_pos) + K.sigmoid(y_pred_neg * y_pred_neg)
 
-    with tf.device('/gpu:0'):
+            else:
+                pairwise_loss = -K.log(
+                    K.sigmoid(y_pred_pos - y_pred_neg) + 1e-07)
+            loss = alpha * pairwise_loss + (1 - alpha) * pointwise_loss
+
+            return tf.reduce_mean(loss)
+
+        embedding_size = lookup[0].shape[1] * 2
+
+        initializer = tf.keras.initializers.RandomNormal(seed=1)
+
         texts_pos = Input(shape=(embedding_size,))
         texts_neg = Input(shape=(embedding_size,))
-        if reg:
-            sigmoid = Dense(1, activation='sigmoid',kernel_constraint=unit_norm(), bias_constraint=unit_norm())
-        else:
-            sigmoid = Dense(1, activation='sigmoid')#,kernel_constraint=unit_norm(), bias_constraint=unit_norm())
 
-        n_out=texts_neg
-        p_out=texts_pos
+        sigmoid = Dense(1, activation='sigmoid', bias_initializer=initializers.Zeros(),
+                        kernel_initializer=initializer)
 
-        for layer_size in layers:
-            drop = Dropout(dropout)
-            if reg:
-                layer = Dense(layer_size, activation=tf.nn.relu,kernel_constraint=unit_norm(), bias_constraint=unit_norm())
+        n_out = texts_neg
+        p_out = texts_pos
+        drop = Dropout(model_params['dropout_first'])
+        n_out = drop(n_out)
+        p_out = drop(p_out)
+
+        for layer_size in model_params['layers']:
+            drop = Dropout(model_params['dropout'])
+            if model_params['reg'] != 0:
+                layer = Dense(layer_size, activation=tf.nn.relu, bias_initializer=initializers.Zeros(),
+                              kernel_initializer=initializer,
+                              kernel_regularizer=regularizers.l2(model_params['reg']))
             else:
-                layer = Dense(layer_size, activation=tf.nn.relu)#,kernel_constraint=unit_norm(), bias_constraint=unit_norm())
-            n_out=layer(drop(n_out))
-            p_out=layer(drop(p_out))
+                layer = Dense(layer_size, bias_initializer=initializers.Zeros(), kernel_initializer=initializer,
+                              activation=tf.nn.relu)
+            n_out = drop(layer(n_out))
+            p_out = drop(layer(p_out))
 
         y_pos = sigmoid(p_out)
         y_neg = sigmoid(n_out)
         model = Model(inputs=[texts_pos, texts_neg], outputs=[y_pos, y_neg])
 
-        loss = custom_loss(y_pos, y_neg, alpha)
+        loss = custom_loss(y_pos, y_neg, model_params)
 
         # Add loss to model
         model.add_loss(loss)
-
-        model.compile(optimizer=tf.keras.optimizers.Adam(lr=lr), )
+        if model_params['optimizer'] == "ADAM":
+            model.compile(optimizer=tf.keras.optimizers.Adam(lr=model_params['lr']))
+        else:
+            model.compile(optimizer=tf.keras.optimizers.SGD(lr=model_params['lr']))
         model.summary()
+    print(model_params)
+    with tf.device('/gpu:0'):
+        seq_train = data_generator(train, lookup=lookup[0], uservector=uservector, model_params=model_params,
+                                   neg_samples=neg_samples_train)
+        tmp = model_params['take_target_out']
+        model_params['take_target_out'] = False
+        seq_validation = data_generator(test, lookup=lookup[0], uservector=uservector, model_params=model_params,
+                                        neg_samples=neg_samples_test)
+        seq_test = test_data_generator(uservector.loc[test_ids.index], lookup[1], model_params=model_params)
+        model_params['take_target_out'] = tmp
 
-        print(int(train.str.len().sum() / batch_size) * neg_samples_per_user)
-
-        seq_train = data_generator(explode_data_and_add_original(train), lookup=lookup, uservector=uservector,
-                             batch_size=batch_size,
-                             neg_samples_per_user=neg_samples_per_user)
-        seq_validation = data_generator(explode_data_and_add_original(val), lookup=lookup, uservector=uservector,
-                             batch_size=batch_size,
-                             neg_samples_per_user=1)
-        history = model.fit(seq_train,validation_data=seq_validation,
-                            epochs=epochs, steps_per_epoch=steps, verbose=1, max_queue_size=1000, shuffle=False,
-                            use_multiprocessing=True, workers=8)
+        ival = IntervalEvaluation(test=test_ids, seq=seq_test, user_embedding=uservector.loc[test_ids.index],
+                                  article_embedding=lookup[1],
+                                  user_item_train=train_grouped,
+                                  model_params=model_params,
+                                  model_path=model_path, seq_validation=seq_validation)
+        if model_params['early_stopping'] and not model_params['stop_on_metric']:
+            patience = model_params['early_stopping']
+        else:
+            patience = 1000
 
 
-        model.save(f'{model_path}')
+        callback = [ival,
+                    tf.keras.callbacks.EarlyStopping(monitor='val_loss', min_delta=0.0005, mode='min',
+                                                     patience=patience,
+                                                     restore_best_weights=True)]
+
+
+        if model_params['train']:
+            history = model.fit(seq_train, validation_data=seq_validation, callbacks=callback,
+                                epochs=model_params['epochs'], steps_per_epoch=model_params['steps'], verbose=1,
+                                max_queue_size=100, shuffle=False,
+                                use_multiprocessing=True, workers=model_params['workers'])
+
+        model.save(f'{model_path}.h5')
+        try:
+            neg_samples_test.close()
+            neg_samples_train.close()
+        except:
+            pass
         del seq_train
         del seq_validation
-    return model,history
+        del seq_test
+    return model, history
+
+#todo make nicer
+class IntervalEvaluation(Callback):
+    def __init__(self, test, seq, user_embedding, article_embedding, user_item_train, model_params, seq_validation,
+                 model_path="tmp"):
+        super(Callback, self).__init__()
+        self.user_item_train = user_item_train
+        self.seq_validation = seq_validation
+        self.seq = seq
+        self.test = test
+        self.model_path = model_path
+        self.user_embedding = user_embedding
+        self.article_embedding = article_embedding
+        self.model_params=model_params
+
+        self.wait = 0
+        self.stopped_epoch = 0
+        self.best_weights = None
+
+    def on_train_begin(self, logs=None):
+        # Allow instances to be re-used
+        self.wait = 0
+        self.stopped_epoch = 0
+
+        self.ndcg100 = -np.Inf
+        self.recall10 = -np.Inf
+        self.best_weights = None
+
+    def on_epoch_end(self, epoch, logs=None, N=300):
+        results = self.model.evaluate(self.seq_validation, batch_size=100)
+        try:
+            if not os.path.exists(f'results/{self.model_path}'):
+                os.makedirs(f'results/{self.model_path}')
+            with open(f"results/{self.model_path}/log", mode='+a') as w:
+                w.writelines(str(results) + "\n")
+        except Exception as error:
+            print(error)
+        try:
+
+            if not os.path.exists(f'results/{self.model_path}'):
+                os.makedirs(f'results/{self.model_path}')
+            with open(f"results/{self.model_path}/log", mode='+a') as w:
+                w.writelines(str((logs.get("loss"), logs.get("val_loss"))) + "\n")
+        except Exception as error:
+            print(error)
+        if (epoch % self.model_params['interval'] == 0 and self.model_params['round'] == 0) or (self.model_params['round'] and self.model_params['round'] % self.model_params['interval'] == 0):
+
+            pred, pred_raw=prediction(self.model, self.user_embedding, self.article_embedding,  self.user_item_train, N, model_params=self.model_params, gen=self.seq, filter=True)
+
+            pred = pred[pred.index.isin(self.test.index)]
+            idea1 = evaluate(pred.sort_index(), self.test.loc[pred.index].sort_index(),
+                             experiment_name=f'{self.model_path}/metrics', limit=1000)
+
+            # early stopping
+            # todo restore best weights if run till the end
+            ndcg100 = idea1[4]
+            recall10 = idea1[3]
+            if self.model_params['early_stopping'] != False and self.model_params['stop_on_metric']:
+                if ndcg100 - self.ndcg100 > 0.0005 or recall10 - self.recall10 > 0.0005:
+                    if ndcg100 - self.ndcg100 > 0.0005:
+                        self.ndcg100 = ndcg100
+
+                    if recall10 - self.recall10 > 0.0005:
+                        self.recall10 = recall10
+                    self.wait = 0
+                    self.best_weights = self.model.get_weights()
+                else:
+                    self.wait += 1
+                    if self.wait >= self.model_params['early_stopping']:
+                        self.stopped_epoch = epoch
+                        self.model.stop_training = True
+                        self.model.set_weights(self.best_weights)
+        if epoch % self.model_params['checkpoint_interval'] == 0 and (self.model_params['round'] == 0):
+            if not os.path.exists(f'{self.model_path}_epochs'):
+                os.makedirs(f'{self.model_path}_epochs')
+            self.model.save(f'{self.model_path}_epochs/{epoch}.h5')
+        if self.model_params['round'] % self.model_params['checkpoint_interval'] == 0 and self.model_params['round']:
+            if not os.path.exists(f'{self.model_path}_epochs'):
+                os.makedirs(f'{self.model_path}_epochs')
+            self.model.save(f'{self.model_path}_epochs/{self.model_params["round"]}.h5')
+
 
 class test_data_generator(tf.keras.utils.Sequence):
+    """
+    For each user feed each article into the network
+    """
+    def __init__(self, uservector, lookup, model_params):
+        self.lookup = lookup
+        self.uservector = uservector
+        self.normalize = model_params.get('normalize', 0)
 
-        def __init__(self, uservector, lookup):
-            self.lookup = lookup
-            self.uservector = uservector
+    def __len__(self):
+        return len(self.uservector)
 
-        def __len__(self):
-            return len(self.uservector)
+    def __getitem__(self, idx):
+        user = self.uservector.iloc[idx, :]
 
-        def __getitem__(self, idx):
-            user = self.uservector.iloc[idx, :]
-            sample = np.concatenate((np.tile(user, (len(self.lookup), 1)), self.lookup.values), axis=1)
+        sample = np.concatenate((np.tile(user, (len(self.lookup), 1)), self.lookup.values), axis=1)
+
+        if self.normalize == 1:
+            sample = sample / np.linalg.norm(sample, ord=2, axis=1, keepdims=True)
+            return ((sample, sample),
+                    sample)
+        if self.normalize == 2:
+            user = np.tile(user, (len(self.lookup), 1))
+            pos = self.lookup.values
+            sample = np.concatenate((user / np.linalg.norm(user, ord=2, axis=1, keepdims=True),
+                                     pos / np.linalg.norm(pos, ord=2, axis=1, keepdims=True)), axis=1)
             return ((sample, sample), sample)
+        return ((sample, sample), sample)
 
-        def on_epoch_end(self):
-            'Updates indexes after each epoch'
-            pass
+    def on_epoch_end(self):
+        'Updates indexes after each epoch'
+        pass
 
-def prediction(model, users, lookup,user_item_train, N,gen=None):
+
+def prediction(model, users, lookup, user_item_train, N, model_params=None, gen=None, filter=True):
     """
     Creates prediction for each article for each user in the testset. Filters out already read articles. Sorts the
     predicted score and returns the top N articles.
     """
+
+    model_params['random_sampling'] = model_params.get('random_sampling', True)
     if gen is None:
-        gen = test_data_generator(users, lookup)
-    pred = model.predict(gen, use_multiprocessing=False, verbose=1, workers=15)
-    pred = pd.DataFrame(pred[0])
+        gen = test_data_generator(users, lookup, model_params)
+    pred_raw = model.predict(gen, use_multiprocessing=False, verbose=1, workers= model_params['workers'])
+    pred = pd.DataFrame(pred_raw[0])
     pred['article'] = lookup.index.fillna(-1).to_list() * len(users)
     pred.index = np.repeat(users.index, repeats=len(lookup))
     pred['read_articles'] = user_item_train
+    pred_raw=pred.copy()
     isnull = pred['read_articles'].isnull()
     if isnull.sum() > 0:
         pred.loc[isnull, 'read_articles'] = [[[]] * isnull.sum()]
-    pred = pred[[x[1] not in x[0] for x in zip(pred['read_articles'], pred['article'])]]
+    if filter:
+        pred = pred[[x[1] not in x[0] for x in zip(pred['read_articles'], pred['article'])]]
     pred = pred.reset_index()
-    pred = pred.sort_values(0, ascending=False).groupby('user_ix').head(N).reset_index().sort_values(0)
+    pred = pred.sort_values(0, ascending=False).groupby('user_ix').head(N).reset_index().sort_values(0, ascending=False)
     pred = pred.groupby('user_ix').apply(lambda x: list(x['article']))
     pred = pd.DataFrame(pred, columns=['predictions'])
-    return pred
-
+    return pred, pred_raw
 
 
 if __name__ == "__main__":
-    from preprocessing import load_data,get_metadata
-    from evaluation import evaluate
-    from helper import restrict_articles_to_timeframe
+    from preprocessing import load_data, get_metadata,load_data_vertical
+
 
     N = 50  # number of predictions
     limit = 5000  # number of samples to look at
     first_time = True
-    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER','processed')
+    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER', 'processed')
 
     user_item_train, user_item_test, user_item_validation = load_data(folder=folder, cut=40)
     metadata = get_metadata(folder=folder, usecols=['resource_id', 'text'])  # slow
     user_item_train = user_item_train.head(limit)
     user_item_test = user_item_test.head(limit)
 
-    # Partner A can remove this
-    # user_item_train, metadata = restrict_articles_to_timeframe(user_item_train, metadata,
-    #                                                                    start_date=datetime.date(2020, 1, 1))
-    # user_item_test, metadata = restrict_articles_to_timeframe(user_item_test, metadata,
-    #                                                                    start_date=datetime.date(2020, 1, 1))
-
     print(f"Data loaded")
-
-    if first_time:
-        preprocessing(user_item_train, metadata, folder=folder)
-    article_embedding, user_embedding = load_embedding(folder=folder)
-    print(f"Embedding loaded")
-
     model_params = {'lr': 0.0001,
                     'batch_size': 400,
                     'epochs': 4,
-                    'neg_samples_per_user': 1,
                     'alpha': 1,
                     'layers': [128, 32, 8],
                     'dropout': 0.5,
                     }
+    if first_time:
+        preprocessing(user_item_train, metadata, folder=folder, model_params=model_params)
+    article_embedding, user_embedding = load_embedding(folder=folder)
+    print(f"Embedding loaded")
+
+
 
     if not os.path.exists('idea1_models'):
         os.makedirs('idea1_models')
-    model, history = nn_train(user_item_train.head(limit),
-                                  user_embedding=user_embedding,
-                                  article_embedding=article_embedding, new=True,
-                                  model_params=model_params,
-                                  model_path='idea1_models/modelname',
-                                  last_x_articles=1000)
-
-    pred = prediction(model, user_embedding.loc[user_item_train.head(limit).index],
-                          article_embedding, user_item_train.head(limit), N)
+    model, history = nn_train(user_item_train.head(limit), user_item_test.head(1000),
+                              user_embedding=user_embedding,
+                              article_embedding=article_embedding, new=True,
+                              model_params=model_params,
+                              model_path='idea1_models/random_sampling',
+                              last_x_articles=1000)
+    pred,raw = prediction(model, user_embedding.loc[user_item_train.head(limit).index],
+                      article_embedding, user_item_train.head(limit), N,model_params=model_params)
     pred = pred[pred.index.isin(user_item_test.index)]
-    idea1 = evaluate(pred, user_item_test.loc[pred.index],
-                     experiment_name='resultsname', limit=limit)
+    idea1 = evaluate(pred.sort_index(), user_item_test.loc[pred.index].sort_index(),
+                     experiment_name='idea1_random_sampling.results', limit=limit)

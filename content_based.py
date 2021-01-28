@@ -45,12 +45,17 @@ def content_predict_tfidf(grouped_train, meta_data, N, limit=600):
     lookup = pd.DataFrame(lookup.T.todense(), index=vectorizer.get_feature_names(),
                           columns=meta_data['resource_id']).T
 
+    if 'test' in meta_data.columns:
+        lookup_test=lookup[lookup.index.isin(meta_data[meta_data['test']].resource_id)]
+    else:
+        lookup_test=lookup
+
     grouped_train = grouped_train.head(limit)
 
     def get_user_similarity(user_history, N=10):
         uservector = lookup.loc[user_history, :].mean() * vectorizer.idf_
-        prediction = lookup.dot(uservector)
-        top_10_other = prediction.drop(index=user_history).sort_values(ascending=False).iloc[:N].reset_index()
+        prediction = lookup_test.dot(uservector)
+        top_10_other = prediction.drop(index=user_history, errors='ignore').sort_values(ascending=False).iloc[:N].reset_index()
 
         return top_10_other['resource_id'].tolist()
 
@@ -105,16 +110,9 @@ if __name__ == "__main__":
     user_item_train, user_item_test, user_item_validation = load_data(folder=folder)
     meta_data = get_metadata(folder=folder,usecols=['resource_id','text'])
 
-
-    # # Partner A can remove this
-    # user_item_train, meta_data = restrict_articles_to_timeframe(user_item_train, meta_data,
-    #                                                             start_date=datetime.date(2020, 1, 1))
-    # user_item_test, metadata = restrict_articles_to_timeframe(user_item_test, meta_data,
-    #                                                            start_date=datetime.date(2020, 1, 1))
-
     content_based_prediction = content_predict_tfidf(user_item_train, meta_data, N, limit=limit).sort_index()
     content_based_prediction = content_based_prediction[content_based_prediction.index.isin(user_item_test.index)]
-    content = evaluate(content_based_prediction, user_item_test.loc[content_based_prediction.index], experiment_name='experiment_xyz',limit=limit)
+    content = evaluate(content_based_prediction, user_item_test.loc[content_based_prediction.index], experiment_name='tf_idf.results',limit=limit)
 
 
     # Tipp: with content_predict_custom_embedding you can input a custom embedding for users/articles.

@@ -54,13 +54,20 @@ def mf_model(grouped_train, model_type='als', new=True, factors=50, model_path='
     return model, user_items, grouped_train_exploded
 
 
-def mf_predict(model, user_items, grouped_train, N=10):
+def mf_predict(model, user_items, grouped_train, N=10,article=None,users=None):
     now = datetime.datetime.now()
     predictions = {}
+
     for user_id, user_ix in dict(enumerate(grouped_train['user'].cat.categories)).items():
+        if users is not None:
+            if user_ix not in users.index:
+                continue
         prediction = model.recommend(user_id, user_items, N=N, filter_already_liked_items=True)
         prediction = grouped_train['artist'].cat.categories[[x[0] for x in prediction]]
-        predictions[user_ix] = [list(prediction)]
+        if article is not None:
+            prediction=[x for x in list(prediction) if x in article['resource_id']]
+        predictions[user_ix] = [prediction]
+
     predictions = pd.DataFrame(predictions).T
     predictions.columns = ['predictions']
     print(f"MF prediction done in {datetime.datetime.now() - now}")
@@ -84,12 +91,6 @@ if __name__ == "__main__":
     user_item_train = user_item_train.head(limit)
     user_item_test = user_item_test.head(limit)
 
-    # Partner A can remove this
-    # user_item_train, metadata = restrict_articles_to_timeframe(user_item_train, metadata,
-    #                                                                    start_date=datetime.date(2020, 1, 1))
-    # user_item_test, metadata = restrict_articles_to_timeframe(user_item_test, metadata,
-    #                                                                    start_date=datetime.date(2020, 1, 1))
-
     print(f"Data loaded")
     if not os.path.exists('mf_models'):
         os.makedirs('mf_models')
@@ -101,4 +102,4 @@ if __name__ == "__main__":
     mf_pred = mf_predict(model, user_items, grouped_train_exploded.head(limit), N=N)
     mf_pred = mf_pred[mf_pred.index.isin(user_item_test.index)]
 
-    mf = evaluate(mf_pred, user_item_test.loc[mf_pred.index], limit=limit, experiment_name='resultsname_mf')
+    mf = evaluate(mf_pred, user_item_test.loc[mf_pred.index], limit=limit, experiment_name='matrix_factorization.results')
