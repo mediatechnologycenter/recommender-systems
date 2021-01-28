@@ -45,6 +45,7 @@ the desired format and location of the files. Run any of the algortihms:
     * idea1_timewise_sampling.py is an example for the idea1 with timewise sampling instead of 
                             random sampling
   * base_FL.py is an example for federated learning
+  * idea2.py is an example, where the corresponding user and item vector are not concatenated from the beginning but rather have some individual layers before the vectors are concatenated.
       
 The **results** are printed and saved in `results/{evaluation_name}`
 
@@ -93,7 +94,7 @@ in the preprocessing resp. the evaluation module.
 |**lr**|Learning Rate for optimizer|0.00001|
 |**batch_size**|Number of samples in each batch|100|
 |**epochs**|Number of epochs to train|50|
-|**layers**|Defines the layers and nodes in the layers. e.g. [a,b,c] will result in a 3 layer network with a nodes in layer 1, b nodes in layer 2, c nodes in layer 3 |[1024, 512, 8]|
+|**layers**|Defines the layers and nodes in the layers. e.g. [a,b,c] will result in a 3 layer network with a nodes in layer 1, b nodes in layer 2, c nodes in layer 3. There is a second possible structure: [[a,b],[c,d] which means that the user and item vector first go through separate layers a(user) and b(user) resp. a(item), b(item) before they are concatenated. Afterwards the concatenated vector is run through layer c and d.|[1024, 512, 8]|
 |**dropout**|Dropout value after each layer|0.5|
 |**reg**|L2 Regularization applied to each layer. 0 Means no regularization.|0|
 |**early_stopping**|Stop training if we do not see a decrease of the validation loss in the last `early_stopping` training rounds. 0 means no early stopping|0|

@@ -77,7 +77,7 @@ def run(cut,high_cut,seed,name):
     # embedd data
     if first_time:
         preprocessing(client_a_user_item_train, client_a_metadata, folder=folder_a, model_params=model_params)
-        print("tx group embedded")
+        print("embedded")
         preprocessing(client_b_user_item_train, client_b_metadata, folder=folder_b, model_params=model_params)
 
     # get embedding
