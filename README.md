@@ -36,17 +36,15 @@ Python 3.6.8
 Packages are in requirements.txt
 
 ## Usage
+
+### Get started
 You can run `run_all.sh` to generate some dummy data and run all the algorithms. The jupyter notebook `results/evaluate.ipynb` displays the results. 
 
-To work with **your own data** create a folder and copy the data in the format described above and run `DATA_FOLDER=your_data_folder python preprocessing.py` to preprocess your data.
+### Connect your data
+To work with your own data create a folder and copy the data in the format described above. Run `DATA_FOLDER=your_data_folder python preprocessing.py` to preprocess your data.
 You can then run any of the algorithms with `DATA_FOLDER=your_data_folder python algorithm.py`
 
-The **results** are printed and saved in `results/{evaluation_name}`
-
-The **training history** of the loss and metrics  are in `results/idea1_models/{model_name}`
-
-Here is the description of the individual algorithms:
-
+### Algorithms
 * content_based.py: Embeds articles with tf-idf, creates user-vectors by averaging over the articles. Creates a ranked
   list of recommendations by cos-similarity. To use your own embedding use
   `content_predict_custom_embedding`
@@ -62,13 +60,22 @@ Here is the description of the individual algorithms:
     * base_FL.py is an example for federated learning. Both users have the same data.
     * idea2.py is an example, where the corresponding user and item vector are not concatenated from the beginning but rather have some individual layers before the vectors are concatenated.
 
+### Results
+Results from the evaluation are printed and saved in `results/{evaluation_name}`
+
+Training history of the loss and metrics are in `results/idea1_models/{model_name}`
+
+
+
 # Data Flow:
 
 The flow through the system is as follows:
 
-0. (_raw data_: The preprocessing transforms the data into horizontal format and generates a train, validation, test
-   split. It stores the new data in the folder given by `DATA_FOLDER` ('processed' by default).
-1. _formatted data_: load_data from the preprocessing module will load the formatted train,test and validation data.
+
+1. _formatted data_: The preprocessing script transforms the data into horizontal format and generates a train, validation, test
+   split. It stores the new data in the folder given by `DATA_FOLDER` ('processed' by default). 
+   The load_data from the preprocessing module will load the formatted train,test and validation data. We have two formats:
+   vertical, where each user item pair is one row and horizontal, where we have one row per user containing the list of clicked items . 
 2. _preprocessed/embedded data_: Each individual algorithm processes the data and prepares it for training. For Idea1
    this step embeds the users and articles into a vector representation and stores these lookup tables in the "
    processed"-folder.
