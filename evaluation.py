@@ -1,19 +1,16 @@
-# Copyright 2019-2020, ETH Zurich, Media Technology Center
+#   Copyright 2021 ETH Zurich, Media Technology Center
 #
-# This file is part of Federated Learning Project at MTC.
+#    Licensed under the Apache License, Version 2.0 (the "License");
+#    you may not use this file except in compliance with the License.
+#    You may obtain a copy of the License at
 #
-# Federated Learning is a free software: you can redistribute it and/or modify
-# it under the terms of the GNU Lesser Public License as published by
-# the Free Software Foundation, either version 3 of the License, or
-# (at your option) any later version.
+#        http://www.apache.org/licenses/LICENSE-2.0
 #
-# Federated Learning is distributed in the hope that it will be useful,
-# but WITHOUT ANY WARRANTY; without even the implied warranty of
-# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-# GNU Lesser Public License for more details.
-#
-# You should have received a copy of the GNU Lesser Public License
-# along with Federated Learning.  If not, see <https://www.gnu.org/licenses/>.
+#    Unless required by applicable law or agreed to in writing, software
+#    distributed under the License is distributed on an "AS IS" BASIS,
+#    WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+#    See the License for the specific language governing permissions and
+#    limitations under the License.
 
 import datetime
 import os
@@ -61,8 +58,9 @@ def evaluate(pred, ground_truth, experiment_name='results.csv', limit=6000):
                             ["Test Recall@50=%.5f (%.5f)", np.mean(r50_list),
                              np.std(r50_list) / np.sqrt(len(r50_list))]])
 
-    if not os.path.exists('results'):
-        os.makedirs('results')
+    path="/".join(f"results/{experiment_name}".split('/')[:-1])
+    if not os.path.exists(path):
+        os.makedirs(path)
     results.to_csv(f"results/{experiment_name}", mode='+a')
 
     return r20_list, r50_list, n100_list,np.mean(r5_list),np.mean(n100_list)

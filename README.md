@@ -1,6 +1,13 @@
-This repository contains a federated learning approach for neural collaborative filtering on news articles. We did not
+This repository contains a federated learning approach for neural collaborative filtering (idea1) on news articles. We did not
 find any existing open source code for federated neural collaborative filtering. This repository can be used to test the
-novel approach described in [[1]](#1) and to compare against common recommender system models as baselines.
+novel approach described in [[1]](#1) which combines content information with the user history. The repo allows you to compare this approach against common recommender system models as baselines.
+
+## Algorithm description
+We expect the items to be text. The approach embeds the items via BERT into a vector space. The users
+are than embedded via these item embeddings by averaging over all item vectors of items the user liked (in the training data).
+For each user item pair we concatenate the user and item vector and feed it into a neural network.
+We also sample a item the user did not like and feed it into the network. We then calculate the pairwise
+loss between the positive and the negative sample and backpropagate. 
 
 # Input Format
 
@@ -18,18 +25,27 @@ Contains three columns:
 
 * "user_id": unique id of the user
 * "resource_id": unique id matching the one in metadata.csv
-* "timestamp":  timestamp of the click
+* "time":  timestamp of the click
 
-# Environement
+# Get Started
+
+## Environement
 
 Python 3.6.8
 
 Packages are in requirements.txt
 
-# Usage
-
+## Usage
 Run preprocessing.py to generate some random data or create data yourself. The functions in the module should describe
-the desired format and location of the files. Run any of the algortihms:
+the desired format and location of the files. 
+
+You can run all examples with `run_all.sh` and use the jupyter notebook `results/evaluate.ipynb` to display the results. 
+      
+The **results** are printed and saved in `results/{evaluation_name}`
+
+The **training history** of the loss and metrics  are in `results/idea1_models/{model_name}`
+
+Here is the description of the individual algorithms:
 
 * content_based.py: Embeds articles with tf-idf, creates user-vectors by averaging over the articles. Creates a ranked
   list of recommendations by cos-similarity. To use your own embedding use
@@ -41,17 +57,10 @@ the desired format and location of the files. Run any of the algortihms:
 * popularity_random: Predicts simply the most popular articles. Predicts random articles.
 * mf_model: Uses ALS to embed the articles and users as latent vectors. Then predicts the top articles for each user
   based on the latent vectors.
-* folder example_scripts: 
-    * idea1_timewise_sampling.py is an example for the idea1 with timewise sampling instead of 
-                            random sampling
-  * base_FL.py is an example for federated learning
-  * idea2.py is an example, where the corresponding user and item vector are not concatenated from the beginning but rather have some individual layers before the vectors are concatenated.
-      
-The **results** are printed and saved in `results/{evaluation_name}`
-
-The **training history** of the loss and metrics  are in `results/idea1_models/{model_name}`
-
-You can run all examples with `run_all.sh` and use the jupyter notebook `results/evaluate.ipynb` to display the results. 
+* folder example_scripts:
+    * idea1_timewise_sampling.py is an example for the idea1 with timewise sampling instead of  random sampling
+    * base_FL.py is an example for federated learning. Both users have the same data.
+    * idea2.py is an example, where the corresponding user and item vector are not concatenated from the beginning but rather have some individual layers before the vectors are concatenated.
 
 # Data Flow:
 
@@ -76,7 +85,7 @@ In the Data Flow we see that every algorithm needs to load the data and evaluate
 in the preprocessing resp. the evaluation module.
 
 * preprocessing.py: Before we run any algorithm we first need to generate the formatted data. This is done by running
-  this module as a script. After this is done, each algorithm simply calls preprocessing.load_data function to load the
+  this module as a script. After this is done, each algorithm simply calls preprocessing.load_data to load the
   formatted data.
 * evaluation.py: This module expects two pd.Series of users:
     * _prediction_: containing a sorted list of article-IDs where the first item is the first ranked article for each
@@ -88,6 +97,7 @@ in the preprocessing resp. the evaluation module.
       already read articles in the prediction.
 
 # Parameters for Idea1
+Main parameters:
 
 |Parameter Name | Description | Default |
 |-------|------------------------|---------|
@@ -99,10 +109,15 @@ in the preprocessing resp. the evaluation module.
 |**reg**|L2 Regularization applied to each layer. 0 Means no regularization.|0|
 |**early_stopping**|Stop training if we do not see a decrease of the validation loss in the last `early_stopping` training rounds. 0 means no early stopping|0|
 |**stop_on_metric**|If True then the early stopping criterion switches to the metrics in the evaluation step. i.e. stop if neither NDCG@100 nor Recall@10 from the validation set did increase in the last `early_stopping` training rounds|False|
-|random_sampling|Whether to use random sampling (True) or timewise sampling (False). timewise sampling expects vertical format loaded with load_data_vertical and prepocessed negative samples|True|
-|folder|Only used for timewise sampling. Working folder to store negative samples |None|
+|**random_sampling**|Whether to use random sampling (True) or timewise sampling (False). timewise sampling expects vertical format loaded with load_data_vertical and prepocessed negative samples|True|
+|**folder**|Only used for timewise sampling. Working folder to store negative samples |None|
+
+Other parameters:
+
+|Parameter Name | Description | Default |
+|-------|------------------------|---------|
 |alpha|Proportion of pairwise loss compared to pointwise loss. Loss is calculated as alpha*pairwise_loss+(1-alpha)*pointwise loss|1|
-|dropout_first|Dropout for the input|same as dropout]|
+|dropout_first|Dropout for the input|same as dropout|
 |normalize|Type of normalization to apply. 0=no normalization. 1=normalize concatenated user and item vector together. 2=normalize user and item vector separatly|0|
 |interval|Evaluation interval. Calculate metrics every `interval` epochs |1|
 |checkpoint_interval|Store the model every `checkpoint_interval` epochs|1|
