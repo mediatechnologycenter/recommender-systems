@@ -29,7 +29,7 @@ if __name__ == "__main__":
     N = 50  # number of predictions
     limit = 5000  # number of samples to look at
     first_time = True
-    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER', 'processed')
+    folder = os.getenv('DATA_FOLDER','processed')
     model_params = {'lr': 0.0001,
                     'batch_size': 400,
                     'epochs': 50,

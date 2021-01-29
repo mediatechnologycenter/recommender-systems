@@ -36,11 +36,11 @@ Python 3.6.8
 Packages are in requirements.txt
 
 ## Usage
-Run preprocessing.py to generate some random data or create data yourself. The functions in the module should describe
-the desired format and location of the files. 
+You can run `run_all.sh` to generate some dummy data and run all the algorithms. The jupyter notebook `results/evaluate.ipynb` displays the results. 
 
-You can run all examples with `run_all.sh` and use the jupyter notebook `results/evaluate.ipynb` to display the results. 
-      
+To work with **your own data** create a folder and copy the data in the format described above and run `DATA_FOLDER=your_data_folder python preprocessing.py` to preprocess your data.
+You can then run any of the algorithms with `DATA_FOLDER=your_data_folder python algorithm.py`
+
 The **results** are printed and saved in `results/{evaluation_name}`
 
 The **training history** of the loss and metrics  are in `results/idea1_models/{model_name}`
@@ -66,9 +66,8 @@ Here is the description of the individual algorithms:
 
 The flow through the system is as follows:
 
-0. (_raw data_: The preprocessing module will generate raw data from a given input folder resp. transform some data into
-   the formatted data which is described in [Input Format](#Input Format). It also generates an train, validation, test
-   split and stores the data in the "processed"-folder.
+0. (_raw data_: The preprocessing transforms the data into horizontal format and generates a train, validation, test
+   split. It stores the new data in the folder given by `DATA_FOLDER` ('processed' by default).
 1. _formatted data_: load_data from the preprocessing module will load the formatted train,test and validation data.
 2. _preprocessed/embedded data_: Each individual algorithm processes the data and prepares it for training. For Idea1
    this step embeds the users and articles into a vector representation and stores these lookup tables in the "
@@ -76,7 +75,7 @@ The flow through the system is as follows:
 3. _training_: Trains and outputs the trained model.
 4. _prediction_: Takes the model and a list of users as input and returns a sorted list of recommendations for each
    user.
-5. _evaluation_: Takes the predicted list of recommendation and the ground truth as input and calculates the evaluation
+5. _evaluation_: Takes the predicted list of recommendations and the ground truth as input, and calculates the evaluation
    metrics.
 
 # Modularity

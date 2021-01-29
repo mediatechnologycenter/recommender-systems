@@ -188,27 +188,11 @@ def transform_horizontal_to_vertical(df):
     return df.explode().reset_index()
 
 
+
 if __name__ == "__main__":
 
     import pandas as pd
-    import numpy as np
-
-    num_articles=99 ### must be <99
-    num_users=10
-    num_user_item_entries=1000
-
-    user_item = pd.DataFrame([np.random.randint(0, num_users, size=(num_user_item_entries)), np.random.randint(0, num_articles, size=(num_user_item_entries))]).T
-    user_item=user_item.reset_index()
-    user_item.columns = ['ts','user_ix', 'article_id']
-
-    text=pd.read_csv('blindtext', sep=';').iloc[:num_articles,:].reset_index()
-    text.columns=['resource_id','text']
-    folder = 'processed'
-    if not os.path.exists(folder):
-        os.makedirs(folder)
-    # Loads the data and saves it in
-    text.to_csv(f'{folder}/meta.csv')
-    user_item.to_parquet(f"{folder}/user_item_matrix_vertical.pq")
+    folder = os.getenv('DATA_FOLDER','processed')
     # Transforms the user-item-matrix into a user-series. For each user we store the articles read as one sorted list.
     # Save the new format.
     # This format is more convenient for creating the split and for training some of the algorithms.

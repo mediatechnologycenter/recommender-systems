@@ -102,7 +102,7 @@ from helper import restrict_articles_to_timeframe
 if __name__ == "__main__":
     N = 150  # number of predictions
     limit = 10000  # number of samples to look at
-    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER','processed')
+    folder = os.getenv('DATA_FOLDER','processed')
 
     user_item_train, user_item_test, user_item_validation = load_data(folder=folder)
     meta_data = get_metadata(folder=folder,usecols=['resource_id','text'])
@@ -110,6 +110,5 @@ if __name__ == "__main__":
     content_based_prediction = content_predict_tfidf(user_item_train, meta_data, N, limit=limit).sort_index()
     content_based_prediction = content_based_prediction[content_based_prediction.index.isin(user_item_test.index)]
     content = evaluate(content_based_prediction, user_item_test.loc[content_based_prediction.index], experiment_name='tf_idf.results',limit=limit)
-
 
     # Tipp: with content_predict_custom_embedding you can input a custom embedding for users/articles.

@@ -61,7 +61,7 @@ if __name__ == "__main__":
     limit = 10000 # number of samples to look at
 
 
-    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER','processed')
+    folder = os.getenv('DATA_FOLDER','processed')
     user_item_train, user_item_test, user_item_validation = load_data_cv(folder=folder)
     user_item_train2 = transform_horizontal_to_vertical(user_item_train)
     itemids = user_item_train2['article_id'].unique()

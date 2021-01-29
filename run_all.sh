@@ -1,3 +1,6 @@
+python example_scripts/create_dummy_data.py
+python preprocessing.py
+
 python idea1.py
 python idea2.py
 python popularity_random.py

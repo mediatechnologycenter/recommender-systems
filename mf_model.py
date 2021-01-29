@@ -81,7 +81,7 @@ if __name__ == "__main__":
     limit = 1000  # number of samples to look at
     factors = 20 # latent dim for ALS
     model_type = 'als'
-    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER','processed')
+    folder = os.getenv('DATA_FOLDER','processed')
 
     user_item_train, user_item_test, user_item_validation = load_data(folder=folder, cut=40)
     metadata = get_metadata(folder=folder, usecols=['resource_id', 'text'])  # slow

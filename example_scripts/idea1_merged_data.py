@@ -40,8 +40,8 @@ def run(cut,high_cut,seed,name):
     N = 300  # number of predictions
     limit = 10000000  # number of samples to look at
     first_time = True
-    folder_a = 'processed'
-    folder_b = 'processed'
+    folder_a = os.getenv('DATA_FOLDER','processed')
+    folder_b = os.getenv('DATA_FOLDER','processed')
     # load data
     client_a_user_item_train, client_a_user_item_test, client_a_user_item_validation = load_data_cv(folder=folder_a,cut=cut,high_cut=high_cut, seed=seed)
     client_a_metadata = get_metadata(folder=folder_a)

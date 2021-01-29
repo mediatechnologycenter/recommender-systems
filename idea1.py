@@ -727,7 +727,7 @@ if __name__ == "__main__":
     N = 50  # number of predictions
     limit = 5000  # number of samples to look at
     first_time = True
-    folder = os.getenv('PARTNER_A_OUTPUT_FOLDER', 'processed')
+    folder = os.getenv('DATA_FOLDER','processed')
 
     user_item_train, user_item_test, user_item_validation = load_data(folder=folder, cut=40)
     metadata = get_metadata(folder=folder, usecols=['resource_id', 'text'])  # slow

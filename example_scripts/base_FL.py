@@ -56,8 +56,8 @@ def run(cut, high_cut, seed, epsilon, lr):
     N = 300  # number of predictions
     limit = 50000000  # number of samples to look at
     first_time = True
-    folder_a = 'processed'
-    folder_b = 'processed'
+    folder_a = os.getenv('DATA_FOLDER','processed')
+    folder_b = os.getenv('DATA_FOLDER','processed')
     client_num=0 #which client to evaluate on
     model_params = {
         'lr': 0.0001,
